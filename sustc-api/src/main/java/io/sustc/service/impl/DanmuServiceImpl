@@ -1,0 +1,165 @@
+package io.sustc.service.impl;
+
+import io.sustc.dto.AuthInfo;
+import io.sustc.service.DanmuService;
+import io.sustc.service.UserService;
+import io.sustc.service.VideoService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+
+@Service
+@Slf4j
+public class DanmuServiceImpl implements DanmuService {
+    private static long DanMuCnt=0,DanMuKeyCnt=0;
+    @Autowired
+    private DataSource dataSource;
+
+    @Override
+    public long sendDanmu(AuthInfo auth, String bv, String content, float time){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return -1;
+        if (content==null||content=="") return -1;
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return -1;
+            if (LocalDateTime.now().isBefore(rs.getTimestamp("publicTime").toLocalDateTime())) return -1;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="select * from MidBv where mid==? and bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, auth.getMid());
+            stmt.setString(2, bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return -1;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="insert into DanMu(DanMuKey,bv,mid,time,content,postTime) values (?,?,?,?,?,?)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            ++DanMuCnt;
+            stmt.setLong(1, DanMuCnt);
+            stmt.setString(2, bv);
+            stmt.setLong(3,auth.getMid());
+            stmt.setFloat(4,time);
+            stmt.setString(5,content);
+            stmt.setTimestamp(6, Timestamp.valueOf(LocalDateTime.now()));
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            return DanMuCnt;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        //目前作者和超级用户可能会在视频未发布时发布弹幕
+    }
+    @Override
+    public List<Long> displayDanmu(String bv, float timeStart, float timeEnd, boolean filter){
+        List<Long> ans=new ArrayList<>();
+        if (timeStart<0||timeEnd<0||timeEnd<timeStart) return null;
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return null;
+            if (LocalDateTime.now().isBefore(rs.getTimestamp("publicTime").toLocalDateTime())) return null;
+            float duration=rs.getFloat("duration");
+            if (timeStart>duration||timeEnd>duration) return null;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+
+        if (filter){
+            sql="select *,rank() over (partition by content order by postTime) as rk from(" +
+                "select * from DanMu where time between ? and ?) where rk==1";
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setFloat(1, timeStart);
+                stmt.setFloat(2, timeEnd);
+                log.info("SQL: {}", stmt);
+                ResultSet rs = stmt.executeQuery();
+                while (rs.next()){
+                    ans.add(rs.getLong("DanMuKey"));
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }else{
+            sql="select * from DanMu where time between ? and ? order by time";
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setFloat(1, timeStart);
+                stmt.setFloat(2, timeEnd);
+                log.info("SQL: {}", stmt);
+                ResultSet rs = stmt.executeQuery();
+                while (rs.next()){
+                    ans.add(rs.getLong("DanMuKey"));
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return ans;
+    }
+    @Override
+    public boolean likeDanmu(AuthInfo auth, long id){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        String sql="select * from DanMu where DanMuKey==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, id);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="select * from DanMuLike where DanMuKey==? and mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1,id);
+            stmt.setLong(2,auth.getMid());
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()){
+                String sql1="insert into DanMuLike(key,DanMuKey,mid) values (?,?,?)";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                ++DanMuKeyCnt;
+                stmt1.setLong(1,DanMuKeyCnt);
+                stmt1.setLong(2,id);
+                stmt1.setLong(3,auth.getMid());
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return true;
+            }
+            else{
+                String sql1="delete from DanMuLike where mid==？ and DanMuKey==?";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                stmt1.setLong(1,auth.getMid());
+                stmt1.setLong(2,id);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return false;
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
