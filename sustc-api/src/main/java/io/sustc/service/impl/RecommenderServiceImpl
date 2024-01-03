@@ -1,0 +1,66 @@
+package io.sustc.service.impl;
+
+import io.sustc.dto.AuthInfo;
+import io.sustc.service.RecommenderService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+
+@Service
+@Slf4j
+public class RecommenderServiceImpl implements RecommenderService {
+    @Autowired
+    private DataSource dataSource;
+    @Override
+    public List<String> recommendNextVideo(String bv){
+        List<String> ans=new ArrayList<>();
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return null;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="with A as (select mid from MidBv where bv==? and op==0) " +
+            "select bv,cnt(*) as cnt from MidBv join A on MidBv and mid==A.mid group by bv order by cnt desc,bv limit 5";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) ans.add(rs.getString("bv"));
+            return ans;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public List<String> generalRecommendations(int pageSize, int pageNum){
+        List<String> ans=new ArrayList<>();
+        return ans;
+    }
+    @Override
+    public List<String> recommendVideosForUser(AuthInfo auth, int pageSize, int pageNum){
+        List<String> ans=new ArrayList<>();
+        return ans;
+    }
+    @Override
+    public List<Long> recommendFriends(AuthInfo auth, int pageSize, int pageNum){
+        List<Long> ans=new ArrayList<>();
+        return ans;
+    }
+}
