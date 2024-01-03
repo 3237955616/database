@@ -1,0 +1,427 @@
+package io.sustc.service.impl;
+
+import io.sustc.dto.AuthInfo;
+import io.sustc.dto.PostVideoReq;
+import io.sustc.dto.RegisterUserReq;
+import io.sustc.dto.UserInfoResp;
+import io.sustc.service.VideoService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.*;
+
+@Service
+@Slf4j
+public class VideoServiceImpl implements VideoService {
+    private static long MidBvCnt=0;
+    private Long bvCnt;
+    @Autowired
+    private DataSource dataSource;
+    @Override
+    public String postVideo(AuthInfo auth, PostVideoReq req){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return null;
+        if (!reqValid(auth.getMid(),req)) return null;
+        String sql="insert into video(bv,title,mid,commitTime,publicTime,duration,description) values (?,?,?,?,?,?,?)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            ++bvCnt;
+            stmt.setString(1,Long.toString(bvCnt));
+            stmt.setString(2,req.getTitle());
+            stmt.setLong(3,auth.getMid());
+            stmt.setTimestamp(4, Timestamp.valueOf(LocalDateTime.now()));
+            stmt.setTimestamp(5,req.getPublicTime());
+            stmt.setFloat(6,req.getDuration());
+            stmt.setString(7,req.getDescription());
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            return Long.toString(bvCnt);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    };
+    @Override
+    public boolean deleteVideo(AuthInfo auth, String bv){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+            if (auth.getMid()!=rs.getInt("mid")){
+                String sql1="select identity from user_ where mid==?";
+                try (PreparedStatement stmt1= conn.prepareStatement(sql1)){
+                    stmt1.setLong(1,auth.getMid());
+                    log.info("SQL: {}", stmt1);
+                    ResultSet rs1 = stmt1.executeQuery();
+                    if (rs1.getString("identity")!="superuser") return false;
+                } catch (SQLException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from MidBv where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1, bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from DanMu where bv=?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1, bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from DanMuLike where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1, bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return true;
+    }
+    @Override
+    public boolean updateVideoInfo(AuthInfo auth, String bv, PostVideoReq req){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+            if (auth.getMid()!=rs.getInt("mid")) return false;
+            if (req.getDuration()!=rs.getDouble("duration")) return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        if (!reqValid(auth.getMid(),req)) return false;
+
+        sql="update video set title=? and commitTime=? and reviewTime=null and publicTime=? and description=? and reviewerMid=null where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,req.getTitle());
+            stmt.setTimestamp(2,Timestamp.valueOf(LocalDateTime.now()));
+//            stmt.setTimestamp(3,null);
+            stmt.setTimestamp(3,req.getPublicTime());
+            stmt.setString(4,req.getDescription());
+//            stmt.setString(6,null);
+            stmt.setString(5,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return true;
+    }
+    @Override
+    public List<String> searchVideo(AuthInfo auth, String keywords, int pageSize, int pageNum){
+        String[] parts=keywords.split(" ");
+        Integer cnt=0;
+        ///等等等等 map？？？
+//        for (String now:parts){
+//            String sql="select * from video where title==\"%?%\"";
+//            try (Connection conn = dataSource.getConnection();
+//                 PreparedStatement stmt= conn.prepareStatement(sql)){
+//                stmt.setString(1,now);
+//                log.info("SQL: {}", stmt);
+//                ResultSet rs = stmt.executeQuery();
+//                if (!rs.next()) ++cnt;
+//            } catch (SQLException e) {
+//                throw new RuntimeException(e);
+//            }
+//            sql="select * from video where description==\"%?%\"";
+//            try (Connection conn = dataSource.getConnection();
+//                 PreparedStatement stmt= conn.prepareStatement(sql)){
+//                stmt.setString(1,now);
+//                log.info("SQL: {}", stmt);
+//                ResultSet rs = stmt.executeQuery();
+//                if (!rs.next()) ++cnt;
+//            } catch (SQLException e) {
+//                throw new RuntimeException(e);
+//            }
+//            sql="select * from video where description==\"%?%\"";
+//            try (Connection conn = dataSource.getConnection();
+//                 PreparedStatement stmt= conn.prepareStatement(sql)){
+//                stmt.setString(1,now);
+//                log.info("SQL: {}", stmt);
+//                ResultSet rs = stmt.executeQuery();
+//                if (!rs.next()) ++cnt;
+//            } catch (SQLException e) {
+//                throw new RuntimeException(e);
+//            }
+//        }
+        return null;
+    }
+    @Override
+    public double getAverageViewRate(String bv){
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return -1;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        String sql1="select avg(timestamp) avg from MidBv where bv==? and op==0";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt1= conn.prepareStatement(sql1)){
+            stmt1.setString(1,bv);
+            log.info("SQL: {}", stmt1);
+            ResultSet rs1 = stmt1.executeQuery();
+            if (!rs1.next()) return -1;
+            return rs1.getDouble("avg");
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public Set<Integer> getHotspot(String bv){
+        Set<Integer> ans=new HashSet<>();
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return ans;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        String sql1="select * from DenMu where bv==? order by postTime";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt1= conn.prepareStatement(sql1)){
+            stmt1.setString(1,bv);
+            log.info("SQL: {}", stmt1);
+            ResultSet rs1 = stmt1.executeQuery();
+            Integer mx=0,i=0,cnt=0;
+            while (rs1.next()){
+                Float now=rs1.getFloat("postTime");
+                if (i==(int)(1.0*now/10)) ++cnt;
+                else{
+                    if (cnt==mx&&mx!=0) ans.add(i);
+                    else if (cnt>mx){
+                        mx=cnt;
+                        ans.clear();
+                        ans.add(i);
+                    }
+                    cnt=1; i=(int)(1.0*now/10);
+                }
+            }
+            return ans;
+
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public boolean reviewVideo(AuthInfo auth, String bv){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        if (!findVideo(auth.getMid(),bv)) return false;
+        String sql="select reviewMid from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            rs.next();
+            if (rs.getString("reviewMid")==null){
+                String sql1="update video set reviewMid=? and reviewTime=? where bv==?";
+                try (PreparedStatement stmt1= conn.prepareStatement(sql1)){
+                    stmt1.setLong(1,auth.getMid());
+                    stmt1.setTimestamp(2,Timestamp.valueOf(LocalDateTime.now()));
+                    stmt1.setString(3,bv);
+                    log.info("SQL: {}", stmt1);
+                    ResultSet rs1 = stmt1.executeQuery();
+                } catch (SQLException e) {
+                    throw new RuntimeException(e);
+                }
+            }else return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return false;
+    }
+    @Override
+    public boolean coinVideo(AuthInfo auth, String bv){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        UserInfoResp Auth=user.getUserInfo(auth.getMid());
+        if (Auth.getCoin()==0) return false;
+        if (!findVideo(auth.getMid(),bv)) return false;
+        String sql="select * from MidBv where mid==? and bv==? and op==3";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1,auth.getMid());
+            stmt.setString(2,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()){
+                String sql1="insert into MidBv(key,mid,bv,op) values (?,?,?,3)";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                ++MidBvCnt;
+                stmt1.setLong(1,MidBvCnt);
+                stmt1.setLong(2,auth.getMid());
+                stmt1.setString(3,bv);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return true;
+            }
+            else return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public boolean likeVideo(AuthInfo auth, String bv){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        if (!findVideo(auth.getMid(),bv)) return false;
+        String sql="select * from MidBv where mid==? and bv==? and op==1";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1,auth.getMid());
+            stmt.setString(2,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()){
+                String sql1="insert into MidBv(key,mid,bv,op) values (?,?,?,1)";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                ++MidBvCnt;
+                stmt1.setLong(1,MidBvCnt);
+                stmt1.setLong(2,auth.getMid());
+                stmt1.setString(3,bv);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return true;
+            }
+            else{
+                String sql1="delete from MidBv where mid==？ and bv==? and op==1";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                stmt1.setLong(1,auth.getMid());
+                stmt1.setString(2,bv);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return false;
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public boolean collectVideo(AuthInfo auth, String bv){
+        UserServiceImpl user=new UserServiceImpl();
+        if (!user.findUser(auth)) return false;
+        if (!findVideo(auth.getMid(),bv)) return false;
+        String sql="select * from MidBv where mid==? and bv==? and op==1";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1,auth.getMid());
+            stmt.setString(2,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()){
+                String sql1="insert into MidBv(key,mid,bv,op) values (?,?,?,2)";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                ++MidBvCnt;
+                stmt1.setLong(1,MidBvCnt);
+                stmt1.setLong(2,auth.getMid());
+                stmt1.setString(3,bv);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return true;
+            }
+            else{
+                String sql1="delete from MidBv where mid==？ and bv==? and op==2";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                stmt1.setLong(1,auth.getMid());
+                stmt1.setString(2,bv);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                return false;
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public boolean findVideo(long mid,String bv){
+        String sql="select * from video where bv==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,bv);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+            else{
+                if (mid==rs.getInt("mid")) return false;
+                if (LocalDateTime.now().isBefore(rs.getTimestamp("publicTime").toLocalDateTime())){
+                    String sql1="select identity from user_ where mid==?";
+                    try (PreparedStatement stmt1= conn.prepareStatement(sql1)){
+                        stmt1.setLong(1, mid);
+                        log.info("SQL: {}", stmt1);
+                        ResultSet rs1 = stmt1.executeQuery();
+                        if (!rs1.next()) return false;
+                        if (rs1.getString("identity")!="superuser") return false;
+                        else return true;
+                    } catch (SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return false;
+    }
+    public boolean reqValid(long mid,PostVideoReq req){
+        if (req.getTitle()==null||req.getTitle()=="") return false;
+        if (req.getDuration()<10.0) return false;
+        if (LocalDateTime.now().isAfter(req.getPublicTime().toLocalDateTime())) return false;
+        String sql="select * from video where title==? and mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setString(1,req.getTitle());
+            stmt.setLong(2,mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return true;
+    }
+}
