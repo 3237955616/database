@@ -1,0 +1,272 @@
+package io.sustc.service.impl;
+
+import io.sustc.dto.AuthInfo;
+import io.sustc.dto.RegisterUserReq;
+import io.sustc.dto.UserInfoResp;
+import io.sustc.service.UserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+
+
+@Service
+@Slf4j
+public class UserServiceImpl implements UserService{
+    private static long midCnt=0,followCnt=0;
+    @Autowired
+    private DataSource dataSource;
+    @Override
+    public long register(RegisterUserReq req){
+        if (req.getPassword()==null||req.getPassword()==""
+          ||req.getName()==null||req.getName()==""
+          ||req.getSex()==null)//这么处理Gender可行吗,unknown gender 可行吗
+            return -1;
+        if (req.getBirthday()!=null&&req.getBirthday()!=""){
+            String bir=req.getBirthday();
+            Integer month=bir.indexOf("月"),day=bir.indexOf("日");
+            if (month==-1||day==-1||month>day) return -1;
+            Integer Month=Integer.valueOf(bir.substring(0,month-1));
+            Integer Day=Integer.valueOf(bir.substring(month+1,day-1));
+            if (Month<1||Month>12||Day<1||Day>31) return -1;
+            if ((Month==2&&Day>29)||(Month==4||Month==6||Month==9||Month==11)&&Day==31) return -1;
+        }
+        String sql="select * from user_ where qq==? or wechat==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, req.getQq());
+            stmt.setString(2, req.getWechat());
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) return -1;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="insert into user_(mid,name,sex,birthday,sign,identity,password,qq,wechat) values (?,?,?,?,?,user,?,?,?)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            ++midCnt;
+            stmt.setLong(1, midCnt);
+            stmt.setString(2, req.getName());
+            stmt.setString(3, req.getSex().name());
+            stmt.setString(4, req.getBirthday());
+            stmt.setString(5, req.getSign());
+            stmt.setString(7, req.getPassword());
+            stmt.setString(8, req.getQq());
+            stmt.setString(9, req.getWechat());
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return midCnt;
+    }
+    @Override
+    public boolean deleteAccount(AuthInfo auth, long mid){
+        if (!findUser(auth)) return false;
+        String sql="select * from user_ where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        if (auth.getMid()!=mid){
+            sql="select identity from user_ where mid==?";
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt= conn.prepareStatement(sql)){
+                stmt.setLong(1, auth.getMid());
+                log.info("SQL: {}", stmt);
+                ResultSet rs = stmt.executeQuery();
+                if (!rs.next()) return false;
+                if (rs.getString("identity")!="superuser") return false;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+            sql="select identity from user_ where mid==?";
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt= conn.prepareStatement(sql)){
+                stmt.setLong(1, mid);
+                log.info("SQL: {}", stmt);
+                ResultSet rs = stmt.executeQuery();
+                rs.next(); if (rs.getString("identity")=="superuser") return false;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        sql="delete from user_ where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1, mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from follow where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1, mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from MidBv where mid==? And op!=4";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1, mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="delete from DanMuLike where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1, mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        //需要删他发布的video和弹幕吗？目前是没删
+        return true;
+    }
+    @Override
+    public boolean follow(AuthInfo auth, long followeeMid){
+        if (!findUser(auth)) return false;
+        String sql="select * from user_ where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, followeeMid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        sql="select * from follow where followerMid==? and followeeMid==?";
+        String sql1;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1,auth.getMid());
+            stmt.setLong(2, followeeMid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()){
+                sql1="insert into follow(key,followerMid,followeeMid) values (?,?,?)";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                ++followCnt;
+                stmt1.setLong(1,followCnt);
+                stmt1.setLong(2,auth.getMid());
+                stmt1.setLong(3,followeeMid);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+            }
+            else{
+                sql1="delete from follow where followerMid==? and followeeMid==?";
+                PreparedStatement stmt1= conn.prepareStatement(sql1);
+                stmt1.setLong(1,auth.getMid());
+                stmt1.setLong(2,followeeMid);
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return true;
+    }
+    @Override
+    public UserInfoResp getUserInfo(long mid){
+        String sql="select * from user_ where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt= conn.prepareStatement(sql)){
+            stmt.setLong(1,mid);
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return null;
+            UserInfoResp a=new UserInfoResp();
+            a.setMid(mid); a.setCoin(rs.getInt("coin"));
+
+            String sql1="select * from follow where followerMid==? or followeeMid==?";
+            PreparedStatement stmt1= conn.prepareStatement(sql1);
+            stmt1.setLong(1,mid);
+            stmt1.setLong(2,mid);
+            log.info("SQL: {}", stmt1);
+            ResultSet rs1 = stmt1.executeQuery();
+            List<Long> list1=new ArrayList<>(),list2=new ArrayList<>();
+            while (!rs1.next()){
+                if (rs1.getLong("followerMid")==mid) list1.add(rs1.getLong("followeeMid"));
+                if (rs1.getLong("followeeMid")==mid) list2.add(rs1.getLong("followerMid"));
+            }
+
+            String sql2="select * from MidBv where mid==?";
+            PreparedStatement stmt2= conn.prepareStatement(sql2);
+            stmt2.setLong(1,mid);
+            log.info("SQL: {}", stmt2);
+            ResultSet rs2 = stmt2.executeQuery();
+            List<String> list3=new ArrayList<>(),list4=new ArrayList<>(),list5=new ArrayList<>(),list6=new ArrayList<>();
+            while (!rs2.next()){
+                int op=rs2.getInt("op");
+                if (op==0) list3.add(rs2.getString("bv"));
+                else if (op==1) list4.add(rs2.getString("bv"));
+                else if (op==2) list5.add(rs2.getString("bv"));
+                else if (op==4) list6.add(rs2.getString("bv"));
+            }
+            a.setFollowing(list1.stream().mapToLong(t->t.longValue()).toArray());
+            a.setFollower(list2.stream().mapToLong(t->t.longValue()).toArray());
+            a.setWatched(list3.toArray(new String[list3.size()]));
+            a.setLiked(list4.toArray(new String[list4.size()]));
+            a.setCollected(list5.toArray(new String[list5.size()]));
+            a.setPosted(list6.toArray(new String[list6.size()]));
+            return a;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    @Override
+    public boolean findUser(AuthInfo auth){
+        String sql="select * from user_ where mid==?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, auth.getMid());
+            log.info("SQL: {}", stmt);
+            ResultSet rs = stmt.executeQuery();
+            if (!rs.next()) return false;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        if (auth.getQq()!=null&&auth.getQq()!=""&&auth.getWechat()!=null&&auth.getWechat()!=""){
+            String sql1="select mid from user_ where qq==?";
+            String sql2="select mid from user_ where wechat==?";
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt1= conn.prepareStatement(sql1);
+                 PreparedStatement stmt2= conn.prepareStatement(sql2)){
+                stmt1.setString(1, auth.getQq());
+                stmt2.setString(1, auth.getWechat());
+                log.info("SQL: {}", stmt1);
+                ResultSet rs1 = stmt1.executeQuery();
+                log.info("SQL: {}", stmt2);
+                ResultSet rs2 = stmt2.executeQuery();
+                rs1.next(); rs2.next();
+                if (rs1.getInt("mid")!=rs2.getInt("mid")||rs1.getInt("mid")!=auth.getMid()) return false;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        //{@code mid} is invalid while {@code qq} and {@code wechat} are both invalid (empty or not found)???
+        //是不是还需要判断只有QQorWeChat的时候和getMid是否匹配？
+        return true;
+    }
+}
